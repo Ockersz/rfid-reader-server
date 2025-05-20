@@ -1,5 +1,6 @@
 // udpServer.js
 const dgram = require("dgram");
+const DatabaseManager = require("./databaseManager");
 
 /**
  * UDPServer handles incoming UDP messages and updates the database accordingly.
@@ -7,10 +8,12 @@ const dgram = require("dgram");
 class UDPServer {
   /**
    * @param {DatabaseManager} dbManager - Instance of DatabaseManager.
+   * @param {DatabaseManager} serverDbManager - Instance of server database
    * @param {Object} options - Server configuration options.
    */
-  constructor(dbManager, options = {}) {
+  constructor(dbManager, serverDbManager, options = {}) {
     this.dbManager = dbManager;
+    this.serverDbManager = serverDbManager;
     this.port = options.port || 5001;
     this.host = options.host || "0.0.0.0"; // Listen on all network interfaces
     this.server = dgram.createSocket("udp4");
@@ -86,6 +89,7 @@ class UDPServer {
           VALUES (?, NOW(), NULL, NOW())
         `;
         await this.dbManager.query(insertQuery, [mouldId]);
+        await this.serverDbManager.query(insertQuery, [mouldId]);
         console.log("Inserted new row with intime:", mouldId);
       }
     } catch (error) {
@@ -113,6 +117,7 @@ class UDPServer {
           WHERE mouldId = ? AND intime IS NOT NULL AND outtime IS NULL
         `;
         await this.dbManager.query(updateQuery, [mouldId]);
+        await this.serverDbManager.query(updateQuery, [mouldId]);
         console.log("Updated row with outtime:", mouldId);
       } else {
         console.log("No active record found for mouldId:", mouldId);

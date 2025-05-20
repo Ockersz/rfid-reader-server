@@ -13,15 +13,25 @@ async function main() {
     port: 3306,
   };
 
+  const serverDbConfig = {
+    host: "44.199.44.200",
+    user: "admin",
+    password: "HexSys@Earth#foam2023",
+    database: "hexsys",
+    port: 3306,
+  };
+
   // Instantiate the DatabaseManager
   const dbManager = new DatabaseManager(dbConfig);
+  const serverDbManager = new DatabaseManager(serverDbConfig);
 
   try {
     // Connect to the database
     await dbManager.connect();
+    await serverDbManager.connect();
 
     // Create and start the UDP server on port 5001
-    const udpServer = new UDPServer(dbManager, { port: 5001, host: "0.0.0.0" });
+    const udpServer = new UDPServer(dbManager, serverDbManager, { port: 5001, host: "0.0.0.0" });
     udpServer.start();
 
     // Create and start an HTTP server on port 5000
