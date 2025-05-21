@@ -8,7 +8,7 @@ async function startApplication() {
     const dbConfig = {
       host: process.env.LOCAL_HOST || "localhost",
       user: process.env.LOCAL_USER || "root",
-      password: process.env.LOCAL_PASSWORD || "",
+      password: process.env.LOCAL_PASSWORD || "123",
       database: process.env.LOCAL_DB || "hexsys",
       port: parseInt(process.env.LOCAL_PORT, 10) || 3306,
     };
