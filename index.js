@@ -1,4 +1,5 @@
-// index.js
+require("dotenv").config(); // Load env vars at the top
+
 const DatabaseManager = require("./databaseManager");
 const UDPServer = require("./udpServer");
 const http = require("http");
@@ -6,37 +7,32 @@ const http = require("http");
 async function main() {
   // MySQL database configuration
   const dbConfig = {
-    host: "localhost",
-    user: "root",
-    password: "123",
-    database: "hexsys",
-    port: 3306,
+    host: process.env.LOCAL_HOST,
+    user: process.env.LOCAL_USER,
+    password: process.env.LOCAL_PASSWORD,
+    database: process.env.LOCAL_DB,
+    port: parseInt(process.env.LOCAL_PORT),
   };
 
   const serverDbConfig = {
-    host: "44.199.44.200",
-    user: "admin",
-    password: "HexSys@Earth#foam2023",
-    database: "hexsys",
-    port: 3306,
+    host: process.env.SERVER_HOST,
+    user: process.env.SERVER_USER,
+    password: process.env.SERVER_PASSWORD,
+    database: process.env.SERVER_DB,
+    port: parseInt(process.env.SERVER_PORT),
   };
 
-  // Instantiate the DatabaseManager
   const dbManager = new DatabaseManager(dbConfig);
   const serverDbManager = new DatabaseManager(serverDbConfig);
 
   try {
-    // Connect to the database
     await dbManager.connect();
     await serverDbManager.connect();
 
-    // Create and start the UDP server on port 5001
     const udpServer = new UDPServer(dbManager, serverDbManager, { port: 5001, host: "0.0.0.0" });
     udpServer.start();
 
-    // Create and start an HTTP server on port 5000
     const httpServer = http.createServer((req, res) => {
-      // Send a plain text response
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("HTTP server is running on port 5000");
     });
@@ -49,5 +45,4 @@ async function main() {
   }
 }
 
-// Start the application
 main();
