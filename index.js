@@ -21,18 +21,20 @@ async function startApplication() {
       port: parseInt(process.env.SERVER_PORT, 10) || 3306,
     };
 
-    // Validate essential server config
     if (!serverDbConfig.host || !serverDbConfig.user || !serverDbConfig.password || !serverDbConfig.database) {
       throw new Error("Missing one or more required SERVER_ environment variables.");
     }
 
+    // Initialize DB managers with pooling
     const dbManager = new DatabaseManager(dbConfig);
     const serverDbManager = new DatabaseManager(serverDbConfig);
 
+    // Optional: ping databases to test connectivity
     await dbManager.connect();
     await serverDbManager.connect();
     console.log("✅ Both databases connected successfully.");
 
+    // Start UDP server
     const udpPort = parseInt(process.env.UDP_PORT, 10) || 5001;
     const udpServer = new UDPServer(dbManager, serverDbManager, {
       port: udpPort,
@@ -41,6 +43,7 @@ async function startApplication() {
     udpServer.start();
     console.log(`📡 UDP server started on port ${udpPort}`);
 
+    // Start HTTP server
     const httpPort = parseInt(process.env.HTTP_PORT, 10) || 5002;
     const httpServer = http.createServer((req, res) => {
       res.writeHead(200, { "Content-Type": "text/plain" });
@@ -50,6 +53,15 @@ async function startApplication() {
     httpServer.listen(httpPort, () => {
       console.log(`🌐 HTTP server listening on port ${httpPort}`);
     });
+
+    // Graceful shutdown (optional)
+    process.on("SIGINT", async () => {
+      console.log("Shutting down...");
+      await dbManager.close();
+      await serverDbManager.close();
+      process.exit(0);
+    });
+
   } catch (error) {
     console.error("❌ Initialization error:", error);
     process.exit(1);

@@ -1,8 +1,7 @@
-// databaseManager.js
-const mysql = require("mysql");
+const mysql = require('mysql2/promise');
 
 /**
- * DatabaseManager handles MySQL connection and query execution.
+ * DatabaseManager handles MySQL connection pooling and query execution using mysql2/promise.
  */
 class DatabaseManager {
   /**
@@ -10,42 +9,66 @@ class DatabaseManager {
    */
   constructor(config) {
     this.config = config;
-    this.connection = mysql.createConnection(config);
+    this.pool = mysql.createPool({
+      ...config,
+      waitForConnections: true,
+      connectionLimit: 5,
+      queueLimit: 0
+    });
   }
 
   /**
-   * Connects to the MySQL database.
+   * Verifies a successful connection to the database.
    * @returns {Promise<void>}
    */
-  connect() {
-    return new Promise((resolve, reject) => {
-      this.connection.connect((err) => {
-        if (err) {
-          console.error("Error connecting to the database:", err);
-          return reject(err);
-        }
-        console.log("Connected to the database");
-        resolve();
-      });
-    });
+  async connect() {
+    try {
+      const connection = await this.pool.getConnection();
+      await connection.ping();
+      connection.release();
+      console.log('✅ Connected to the database');
+    } catch (err) {
+      console.error('❌ Database connection failed:', err.message);
+      throw err;
+    }
   }
 
   /**
    * Executes a SQL query.
-   * @param {string} sql - The SQL query string.
-   * @param {Array} values - The values to be escaped in the query.
+   * @param {string} sql - SQL query string.
+   * @param {Array} values - Values to be safely injected.
    * @returns {Promise<any>} - Query results.
    */
-  query(sql, values) {
-    return new Promise((resolve, reject) => {
-      this.connection.query(sql, values, (err, results) => {
-        if (err) {
-          console.error("Error executing query:", err);
-          return reject(err);
-        }
-        resolve(results);
-      });
-    });
+  async query(sql, values = []) {
+    try {
+      const [rows] = await this.pool.execute(sql, values);
+      return rows;
+    } catch (err) {
+      throw new Error(`Query failed: ${sql} - ${err.message}`);
+    }
+  }
+
+  /**
+   * Closes the database connection pool.
+   * @returns {Promise<void>}
+   */
+  async close() {
+    try {
+      await this.pool.end();
+      console.log('✅ Database pool closed');
+    } catch (err) {
+      console.error('❌ Error closing database pool:', err.message);
+      throw err;
+    }
+  }
+
+  /**
+   * Escapes a value for use in raw queries.
+   * @param {*} value - The value to escape.
+   * @returns {string}
+   */
+  escape(value) {
+    return mysql.escape(value);
   }
 }
 
