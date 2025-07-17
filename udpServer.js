@@ -1,6 +1,7 @@
 // udpServer.js
 const dgram = require("dgram");
 const DatabaseManager = require("./databaseManager");
+const moment = require('moment');
 
 /**
  * UDPServer handles incoming UDP messages and updates the database accordingly.
@@ -22,7 +23,10 @@ class UDPServer {
       this.server.close();
     });
 
-    this.server.on("message", (msg, rinfo) => this._handleMessage(msg, rinfo));
+    this.server.on("message", (msg, rinfo) => {
+      // console.log(msg, rinfo);
+      this._handleMessage(msg, rinfo)
+    });
 
     this.server.on("listening", () => {
       const address = this.server.address();
@@ -38,9 +42,14 @@ class UDPServer {
 
     try {
       if (ip === "192.168.2.215") {
-        await this._handleIntimeInsert(cleanMessage);
-      } else if (ip === "192.168.2.216") {
+        // console.log("Received outtime message");
+        // console.log(`Outtime message: ${cleanMessage}`);
         await this._handleOuttimeUpdate(cleanMessage);
+      } else if (ip === "192.168.2.216") {
+        // console.log("Received intime message");
+        // console.log(`Intime message: ${cleanMessage}`);
+        await this._handleIntimeInsert(cleanMessage);
+
       } else {
         console.log(`Unhandled IP address: ${ip}`);
       }
@@ -51,7 +60,7 @@ class UDPServer {
 
   async _handleIntimeInsert(mouldId) {
     try {
-      const checkQuery = `SELECT * FROM hexsys.rfid WHERE mouldId = ? AND intime IS NOT NULL AND outtime IS NULL`;
+      const checkQuery = `SELECT * FROM rfid_db.rfid WHERE mouldId = ? AND intime IS NOT NULL AND outtime IS NULL`;
       const results = await this.dbManager.query(checkQuery, [mouldId]);
 
       if (results.length > 0) {
@@ -59,14 +68,15 @@ class UDPServer {
         return;
       }
 
-      const insertQuery = `INSERT INTO hexsys.rfid (mouldId, intime, outtime, creadt, sync_status) VALUES (?, NOW(), NULL, NOW(), 'pending')`;
+      const insertQuery = `INSERT INTO rfid_db.rfid (mouldId, intime, outtime, creadt, sync_status) VALUES (?, NOW(), NULL, NOW(), 'pending')`;
       const result = await this.dbManager.query(insertQuery, [mouldId]);
       const insertedId = result.insertId;
 
       try {
-        const serverInsertQuery = `INSERT INTO hexsys.rfid (id, mouldId, intime, outtime, creadt) VALUES (?, ?, NOW(), NULL, NOW())`;
+        const dateTimeNow = moment(new Date(), 'YYYY-MM-DD HH:mm:ss');
+        const serverInsertQuery = `INSERT INTO hexsys.rfid (id, mouldId, intime, outtime, creadt) VALUES (?, ?, ${dateTimeNow}, NULL, ${dateTimeNow})`;
         await this.serverDbManager.query(serverInsertQuery, [insertedId, mouldId]);
-        await this.dbManager.query(`UPDATE hexsys.rfid SET sync_status = 'synced' WHERE id = ?`, [insertedId]);
+        await this.dbManager.query(`UPDATE rfid_db.rfid SET sync_status = 'synced' WHERE id = ?`, [insertedId]);
       } catch (err) {
         console.warn("Server DB sync failed for insert. Will retry later.");
       }
@@ -79,18 +89,19 @@ class UDPServer {
 
   async _handleOuttimeUpdate(mouldId) {
     try {
-      const checkQuery = `SELECT * FROM hexsys.rfid WHERE mouldId = ? AND intime IS NOT NULL AND outtime IS NULL ORDER BY id DESC LIMIT 1`;
+      const checkQuery = `SELECT * FROM rfid_db.rfid WHERE mouldId = ? AND intime IS NOT NULL AND outtime IS NULL ORDER BY id DESC LIMIT 1`;
       const results = await this.dbManager.query(checkQuery, [mouldId]);
 
       if (results.length > 0) {
         const { id } = results[0];
-        const updateQuery = `UPDATE hexsys.rfid SET outtime = NOW(), sync_status = 'pending' WHERE id = ?`;
+        const updateQuery = `UPDATE rfid_db.rfid SET outtime = NOW(), sync_status = 'pending' WHERE id = ?`;
         await this.dbManager.query(updateQuery, [id]);
 
         try {
-          const serverUpdateQuery = `UPDATE hexsys.rfid SET outtime = NOW() WHERE id = ?`;
+          const dateTimeNow = moment(new Date(), 'YYYY-MM-DD HH:mm:ss');
+          const serverUpdateQuery = `UPDATE hexsys.rfid SET outtime = ${dateTimeNow} WHERE id = ?`;
           await this.serverDbManager.query(serverUpdateQuery, [id]);
-          await this.dbManager.query(`UPDATE hexsys.rfid SET sync_status = 'synced' WHERE id = ?`, [id]);
+          await this.dbManager.query(`UPDATE rfid_db.rfid SET sync_status = 'synced' WHERE id = ?`, [id]);
         } catch (err) {
           console.warn("Server DB sync failed for update. Will retry later.");
         }
@@ -106,7 +117,7 @@ class UDPServer {
 
   async _syncPendingRecords() {
     try {
-      const pendingRecords = await this.dbManager.query(`SELECT * FROM hexsys.rfid WHERE sync_status = 'pending'`);
+      const pendingRecords = await this.dbManager.query(`SELECT * FROM rfid_db.rfid WHERE sync_status = 'pending'`);
 
       for (const row of pendingRecords) {
         const { id, mouldId, intime, outtime, creadt } = row;
@@ -122,7 +133,7 @@ class UDPServer {
 
         try {
           await this.serverDbManager.query(query, [id, mouldId, intime, outtime, creadt]);
-          await this.dbManager.query(`UPDATE hexsys.rfid SET sync_status = 'synced' WHERE id = ?`, [id]);
+          await this.dbManager.query(`UPDATE rfid_db.rfid SET sync_status = 'synced' WHERE id = ?`, [id]);
           console.log(`✅ Synced record ID: ${id}`);
         } catch (err) {
           console.warn(`❌ Sync failed for record ID ${id}:`, err.message);

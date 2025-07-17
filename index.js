@@ -9,7 +9,7 @@ async function startApplication() {
       host: process.env.LOCAL_HOST || "localhost",
       user: process.env.LOCAL_USER || "root",
       password: process.env.LOCAL_PASSWORD || "123",
-      database: process.env.LOCAL_DB || "hexsys",
+      database: process.env.LOCAL_DB || "rfid_db",
       port: parseInt(process.env.LOCAL_PORT, 10) || 3306,
     };
 
