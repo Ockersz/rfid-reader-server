@@ -2,6 +2,9 @@ require("dotenv").config();
 const http = require("http");
 const DatabaseManager = require("./databaseManager");
 const UDPServer = require("./udpServer");
+const axios = require("axios");
+
+let dbManager, serverDbManager; // Define at top for access in poller
 
 async function startApplication() {
   try {
@@ -26,10 +29,9 @@ async function startApplication() {
     }
 
     // Initialize DB managers with pooling
-    const dbManager = new DatabaseManager(dbConfig);
-    const serverDbManager = new DatabaseManager(serverDbConfig);
+    dbManager = new DatabaseManager(dbConfig);
+    serverDbManager = new DatabaseManager(serverDbConfig);
 
-    // Optional: ping databases to test connectivity
     await dbManager.connect();
     await serverDbManager.connect();
     console.log("✅ Both databases connected successfully.");
@@ -54,7 +56,11 @@ async function startApplication() {
       console.log(`🌐 HTTP server listening on port ${httpPort}`);
     });
 
-    // Graceful shutdown (optional)
+    // Start polling every 1 minute
+    setInterval(pollExternalControllers, 60 * 1000);
+    pollExternalControllers();
+
+    // Graceful shutdown
     process.on("SIGINT", async () => {
       console.log("Shutting down...");
       await dbManager.close();
@@ -72,5 +78,35 @@ process.on("unhandledRejection", (err) => {
   console.error("🔴 Unhandled rejection:", err);
   process.exit(1);
 });
+
+// 🛰️ Periodic fetch from external controller IP
+const pollExternalControllers = async () => {
+  try {
+    const response = await axios.get("http://192.168.2.70:8000");
+    const data = response.data;
+
+    await insertTemperatureLine(data);
+    console.log(`[${new Date().toISOString()}] ✅ Controller data inserted`);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ❌ Failed to fetch or insert data:`, error.message);
+  }
+};
+
+const insertTemperatureLine = async (data) => {
+  const timestamp = data.timestamp;
+  const controllers = data.controllers;
+
+  const inVal = controllers["1"]?.pv ?? 0;
+  const midVal = controllers["2"]?.pv ?? 0;
+  const outVal = controllers["3"]?.pv ?? 0;
+  const pressureVal = controllers["4"]?.pv ?? 0;
+
+  const query = `
+    INSERT INTO temperature_line (\`date\`, \`intemp\`, \`middletemp\`, \`outtemp\`, \`pressure\`)
+    VALUES (?, ?, ?, ?, ?)
+  `;
+
+  await dbManager.pool.query(query, [timestamp, inVal, midVal, outVal, pressureVal]);
+};
 
 startApplication();
