@@ -1,5 +1,6 @@
 require("dotenv").config();
-const http = require("http");
+const https = require("https");
+const fs = require("fs");
 const DatabaseManager = require("./databaseManager");
 const UDPServer = require("./udpServer");
 const axios = require("axios");
@@ -47,10 +48,52 @@ async function startApplication() {
 
     // Start HTTP server
     const httpPort = parseInt(process.env.HTTP_PORT, 10) || 5002;
-    const httpServer = http.createServer((req, res) => {
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("HTTP server is running");
+    const url = require("url");
+
+    const sslOptions = {
+      key: fs.readFileSync("/home/ubuntu/ssl/key.pem"),
+      cert: fs.readFileSync("/home/ubuntu/ssl/cert.pem")
+    };
+
+    // const httpsPort = parseInt(process.env.HTTPS_PORT, 10) || 8443;
+
+    const httpServer = require("http").createServer(async (req, res) => {
+      const parsedUrl = url.parse(req.url, true);
+
     });
+
+    // const httpsServer = https.createServer(sslOptions, async (req, res) => {
+    //   const parsedUrl = url.parse(req.url, true);
+
+    //   res.setHeader("Access-Control-Allow-Origin", "*");
+    //   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    //   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+    //   if (req.method === "GET" && parsedUrl.pathname === "/health") {
+    //     res.writeHead(200, { "Content-Type": "application/json" });
+    //     res.end(JSON.stringify({ status: "ok" }));
+    //   } else if (req.method === "GET" && parsedUrl.pathname === "/latest-temperature") {
+    //     try {
+    //       const [rows] = await dbManager.pool.query(`SELECT * FROM temperature_line ORDER BY date DESC LIMIT 1`);
+
+
+    //       res.writeHead(200, { "Content-Type": "application/json" });
+    //       res.end(JSON.stringify(rows[0] || {}));
+    //     } catch (err) {
+    //       res.writeHead(500, { "Content-Type": "application/json" });
+    //       res.end(JSON.stringify({ error: "Failed to fetch latest data", details: err.message }));
+    //     }
+    //   } else {
+    //     res.writeHead(404, { "Content-Type": "application/json" });
+    //     res.end(JSON.stringify({ error: "Not Found" }));
+    //   }
+    // });
+
+
+
+    // httpsServer.listen(httpsPort, () => {
+    //   console.log(`🔐 HTTPS server listening on port ${httpsPort}`);
+    // });
 
     httpServer.listen(httpPort, () => {
       console.log(`🌐 HTTP server listening on port ${httpPort}`);
@@ -82,7 +125,7 @@ process.on("unhandledRejection", (err) => {
 // 🛰️ Periodic fetch from external controller IP
 const pollExternalControllers = async () => {
   try {
-    const response = await axios.get("http://192.168.2.70:8000");
+    const response = await axios.get("http://192.168.2.70:5000");
     const data = response.data;
 
     await insertTemperatureLine(data);

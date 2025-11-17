@@ -89,78 +89,62 @@ class UDPServer {
 
   async _handleOuttimeUpdate(mouldId) {
     try {
-      const checkQuery = `SELECT * FROM rfid_db.rfid WHERE mouldId = ? AND intime IS NOT NULL AND outtime IS NULL ORDER BY id DESC LIMIT 1`;
+      const checkQuery = `SELECT a.*,
+        (SELECT 
+            COUNT(*)
+        FROM
+            rfid r
+        WHERE
+            r.mouldId = a.mouldId
+                AND r.intime BETWEEN CASE
+                WHEN
+                    TIME(a.intime) >= '07:00:00'
+                        AND TIME(a.intime) < '19:00:00'
+                THEN
+                    DATE_SUB(DATE(a.intime), INTERVAL 0 DAY) + INTERVAL '07:00:00' HOUR_SECOND
+                ELSE CASE
+                    WHEN TIME(a.intime) >= '19:00:00' THEN DATE(a.intime) + INTERVAL '19:00:00' HOUR_SECOND
+                    ELSE DATE_SUB(DATE(a.intime), INTERVAL 1 DAY) + INTERVAL '19:00:00' HOUR_SECOND
+                END
+            END AND a.intime) AS cycle_count
+        FROM rfid_db.rfid a WHERE mouldId = ? AND intime IS NOT NULL AND outtime IS NULL ORDER BY id DESC LIMIT 1`;
       const results = await this.dbManager.query(checkQuery, [mouldId]);
 
       if (results.length > 0) {
-        const { id, intime, outtime } = results[0];
-        const searchTemp = await this.dbManager.query(`
-          SELECT 
-            ROUND(MIN(intemp), 2) in_min,
-            ROUND(MAX(intemp), 2) in_max,
-            ROUND(AVG(intemp), 2) in_avg,
-            ROUND(MIN(middletemp), 2) mid_min,
-            ROUND(MAX(middletemp), 2) mid_max,
-            ROUND(AVG(middletemp), 2) mid_avg,
-            ROUND(MIN(outtemp), 2) out_min,
-            ROUND(MAX(outtemp), 2) out_max,
-            ROUND(AVG(outtemp), 2) out_avg,
-            ROUND(AVG(pressure), 2) pressure,
-            ROUND(MIN(pressure), 2) pressure_min,
-            ROUND(MAX(pressure), 2) pressure_max
-            FROM
-                rfid_db.temperature_line
-            WHERE
-                (date BETWEEN '${intime}' AND NOW());`);
-        const tempLogs = await this.dbManager.query(`
-          WITH time_buckets AS (
-              SELECT  
-                  DATE_ADD('${intime}', INTERVAL (seq * 3) MINUTE) AS bucket_time
-              FROM (
-                  SELECT @row := @row + 1 AS seq
-                  FROM information_schema.columns, (SELECT @row := -1) AS init
-                  LIMIT 1000  -- Adjust based on max time range in minutes / 3
-              ) AS seq_gen
-          ),
-          closest_logs AS (
-              SELECT 
-                  t.id,
-                  t.date,
-                  t.intemp,
-                  t.middletemp,
-                  t.outtemp,
-                  t.pressure,
-                  tb.bucket_time,
-                  ABS(TIMESTAMPDIFF(SECOND, t.date, tb.bucket_time)) AS time_diff,
-                  ROW_NUMBER() OVER (PARTITION BY tb.bucket_time ORDER BY ABS(TIMESTAMPDIFF(SECOND, t.date, tb.bucket_time))) AS rn
-              FROM 
-                  time_buckets tb
-              JOIN 
-                  rfid_db.temperature_line t
-                  ON t.date BETWEEN '${intime}' AND NOW()
-                  AND t.intemp > 5
-                  AND t.middletemp > 5
-                  AND t.outtemp > 5
-                  AND t.pressure > 0
-                  AND t.date BETWEEN DATE_SUB(tb.bucket_time, INTERVAL 90 SECOND)
-                                  AND DATE_ADD(tb.bucket_time, INTERVAL 90 SECOND)
-          )
-          SELECT 
-              id, date, intemp, middletemp, outtemp, pressure, bucket_time
-          FROM 
-              closest_logs
-          WHERE 
-              rn = 1
-          ORDER BY 
-              date;
-          `);
-          console.log("Temperature Logs:", tempLogs);
-          let tempLogsJson = '[]';
-          if(tempLogs?.length > 0) {
-            // json stringify temperature logs
-            tempLogsJson = JSON.stringify(tempLogs);
-            console.log("Temperature Logs:", tempLogsJson);
-          }
+        const { id, intime, outtime, cycle_count } = results[0];
+        const intimeFormatted = new Date(intime)
+          .toISOString()
+          .slice(0, 19)
+          .replace('T', ' ');
+
+        const queryForTem = `
+  SELECT 
+    ROUND(MIN(intemp), 2) in_min,
+    ROUND(MAX(intemp), 2) in_max,
+    ROUND(AVG(intemp), 2) in_avg,
+    ROUND(MIN(middletemp), 2) mid_min,
+    ROUND(MAX(middletemp), 2) mid_max,
+    ROUND(AVG(middletemp), 2) mid_avg,
+    ROUND(MIN(outtemp), 2) out_min,
+    ROUND(MAX(outtemp), 2) out_max,
+    ROUND(AVG(outtemp), 2) out_avg,
+    ROUND(AVG(pressure), 2) pressure,
+    ROUND(MIN(pressure), 2) pressure_min,
+    ROUND(MAX(pressure), 2) pressure_max
+  FROM rfid_db.temperature_line
+  WHERE 
+    date BETWEEN '${intimeFormatted}' AND NOW()
+    AND (intemp > 5 AND middletemp > 5 AND outtemp > 5 AND pressure > 1 AND pressure < 10);`;
+
+        console.log(queryForTem);
+        const searchTemp = await this.dbManager.query(queryForTem);
+        console.log("Temperature search results:", searchTemp);
+        const [tempLogs] = await this.dbManager.query(`CALL get_temperature_logs(?)`, [intime]);
+        let tempLogsJson = '[]';
+        if (tempLogs?.length > 0) {
+          // json stringify temperature logs
+          tempLogsJson = JSON.stringify(tempLogs);
+        }
 
         const updateQuery = `UPDATE rfid_db.rfid SET outtime = NOW(), sync_status = 'pending',
           in_min = ${searchTemp[0].in_min},
@@ -175,7 +159,8 @@ class UDPServer {
           pressure = ${searchTemp[0].pressure},
           pressure_min = ${searchTemp[0].pressure_min},
           pressure_max = ${searchTemp[0].pressure_max},
-          templogs = '${tempLogsJson}'
+          templogs = '${tempLogsJson}',
+          cycle = ${cycle_count}
         WHERE id = ?`;
         await this.dbManager.query(updateQuery, [id]);
 
@@ -194,7 +179,8 @@ class UDPServer {
             pressure = ${searchTemp[0].pressure},
             pressure_min = ${searchTemp[0].pressure_min},
             pressure_max = ${searchTemp[0].pressure_max},
-            templogs = '${tempLogsJson}'
+            templogs = '${tempLogsJson}',
+            cycle = ${cycle_count}
           WHERE id = ?`;
           await this.serverDbManager.query(serverUpdateQuery, [id]);
           await this.dbManager.query(`UPDATE rfid_db.rfid SET sync_status = 'synced' WHERE id = ?`, [id]);
@@ -216,11 +202,11 @@ class UDPServer {
       const pendingRecords = await this.dbManager.query(`SELECT * FROM rfid_db.rfid WHERE sync_status = 'pending'`);
 
       for (const row of pendingRecords) {
-        const { id, mouldId, intime, outtime, creadt, in_min, in_max, in_avg, mid_min, mid_max, mid_avg, out_min, out_max, out_avg, pressure, pressure_min, pressure_max, templogs } = row;
+        const { id, mouldId, intime, outtime, creadt, in_min, in_max, in_avg, mid_min, mid_max, mid_avg, out_min, out_max, out_avg, pressure, pressure_min, pressure_max, templogs, cycle } = row;
         const query = `
           INSERT INTO hexsys.rfid (id, mouldId, intime, outtime,
-            in_min, in_max, in_avg, mid_min, mid_max, mid_avg, out_min, out_max, out_avg, pressure, pressure_min, pressure_max, templogs, creadt)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            in_min, in_max, in_avg, mid_min, mid_max, mid_avg, out_min, out_max, out_avg, pressure, pressure_min, pressure_max, templogs, creadt, cycle)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
             mouldId = VALUES(mouldId),
             intime = VALUES(intime),
@@ -238,11 +224,12 @@ class UDPServer {
             pressure_min = VALUES(pressure_min),
             pressure_max = VALUES(pressure_max),
             templogs = VALUES(templogs),
-            creadt = VALUES(creadt)
+            creadt = VALUES(creadt),
+            cycle = VALUES(cycle)
         `;
 
         try {
-          await this.serverDbManager.query(query, [id, mouldId, intime, outtime, in_min, in_max, in_avg, mid_min, mid_max, mid_avg, out_min, out_max, out_avg, pressure, pressure_min, pressure_max, templogs, creadt]);
+          await this.serverDbManager.query(query, [id, mouldId, intime, outtime, in_min, in_max, in_avg, mid_min, mid_max, mid_avg, out_min, out_max, out_avg, pressure, pressure_min, pressure_max, templogs, creadt, cycle]);
           await this.dbManager.query(`UPDATE rfid_db.rfid SET sync_status = 'synced' WHERE id = ?`, [id]);
           console.log(`✅ Synced record ID: ${id}`);
         } catch (err) {
