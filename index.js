@@ -9,15 +9,32 @@ let dbManager, serverDbManager, httpServer, udpServer, tempPollInterval; // Defi
 let tempPollInProgress = false;
 let shutdownInProgress = false;
 
+function getEnvInt(name, defaultValue) {
+  const value = parseInt(process.env[name], 10);
+  return Number.isInteger(value) && value > 0 ? value : defaultValue;
+}
+
+function getEnvBool(name, defaultValue = false) {
+  const value = process.env[name];
+
+  if (value === undefined) {
+    return defaultValue;
+  }
+
+  return ["1", "true", "yes"].includes(value.toLowerCase());
+}
+
 function getPoolOptions(prefix) {
   return {
     pool: {
-      connectionLimit: parseInt(process.env[`${prefix}_DB_CONNECTION_LIMIT`], 10) || 5,
-      maxIdle: parseInt(process.env[`${prefix}_DB_MAX_IDLE`], 10) || 2,
-      idleTimeout: parseInt(process.env[`${prefix}_DB_IDLE_TIMEOUT_MS`], 10) || 30_000,
-      queueLimit: parseInt(process.env[`${prefix}_DB_QUEUE_LIMIT`], 10) || 50,
+      connectionLimit: getEnvInt(`${prefix}_DB_CONNECTION_LIMIT`, 5),
+      maxIdle: getEnvInt(`${prefix}_DB_MAX_IDLE`, 2),
+      idleTimeout: getEnvInt(`${prefix}_DB_IDLE_TIMEOUT_MS`, 30_000),
+      queueLimit: getEnvInt(`${prefix}_DB_QUEUE_LIMIT`, 50),
+      connectTimeout: getEnvInt(`${prefix}_DB_CONNECT_TIMEOUT_MS`, 10_000),
     },
-    slowQueryThresholdMs: parseInt(process.env.DB_SLOW_QUERY_THRESHOLD_MS, 10) || 2_000,
+    slowQueryThresholdMs: getEnvInt("DB_SLOW_QUERY_THRESHOLD_MS", 2_000),
+    poolDebug: getEnvBool("DB_POOL_DEBUG"),
   };
 }
 
@@ -80,8 +97,20 @@ async function startApplication() {
     serverDbManager = new DatabaseManager(serverDbConfig, { name: "server", ...getPoolOptions("SERVER") });
 
     await dbManager.connect();
-    await serverDbManager.connect();
-    console.log("✅ Both databases connected successfully.");
+
+    try {
+      await serverDbManager.connect();
+      console.log("✅ Both databases connected successfully.");
+    } catch (err) {
+      if (getEnvBool("SERVER_DB_REQUIRED")) {
+        throw err;
+      }
+
+      console.warn(
+        "⚠️ Server database is not reachable at startup; continuing with local DB and retrying server sync later:",
+        err.message
+      );
+    }
 
     // Start UDP server
     const udpPort = parseInt(process.env.UDP_PORT, 10) || 5001;

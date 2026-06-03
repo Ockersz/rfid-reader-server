@@ -22,6 +22,7 @@ class DatabaseManager {
     this.config = config;
     this.name = options.name || config.database || config.host || 'mysql';
     this.slowQueryThresholdMs = options.slowQueryThresholdMs ?? 2_000;
+    this.poolDebug = options.poolDebug ?? false;
     this.pool = mysql.createPool({
       ...config,
       ...DEFAULT_POOL_CONFIG,
@@ -37,11 +38,15 @@ class DatabaseManager {
     });
 
     this.pool.on('acquire', (connection) => {
-      console.log(`➡️ [${this.name}] acquired MySQL connection ${connection.threadId}`);
+      if (this.poolDebug) {
+        console.log(`➡️ [${this.name}] acquired MySQL connection ${connection.threadId}`);
+      }
     });
 
     this.pool.on('release', (connection) => {
-      console.log(`⬅️ [${this.name}] released MySQL connection ${connection.threadId}`);
+      if (this.poolDebug) {
+        console.log(`⬅️ [${this.name}] released MySQL connection ${connection.threadId}`);
+      }
     });
 
     this.pool.on('enqueue', () => {
