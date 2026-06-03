@@ -13,6 +13,8 @@ class UDPServer {
     this.port = options.port || 5001;
     this.host = options.host || "0.0.0.0";
     this.server = dgram.createSocket("udp4");
+    this.syncInProgress = false;
+    this.syncInterval = null;
     this._setupListeners();
     this._startSyncJob();
   }
@@ -242,11 +244,38 @@ class UDPServer {
   }
 
   _startSyncJob() {
-    setInterval(() => this._syncPendingRecords(), 60 * 1000);
+    this.syncInterval = setInterval(async () => {
+      if (this.syncInProgress) {
+        console.warn("⏳ Previous sync job is still running; skipping this interval to avoid DB pile-up");
+        return;
+      }
+
+      this.syncInProgress = true;
+      try {
+        await this._syncPendingRecords();
+      } finally {
+        this.syncInProgress = false;
+      }
+    }, 60 * 1000);
   }
 
   start() {
     this.server.bind(this.port, this.host);
+  }
+
+  close() {
+    if (this.syncInterval) {
+      clearInterval(this.syncInterval);
+      this.syncInterval = null;
+    }
+
+    try {
+      this.server.close();
+    } catch (err) {
+      if (err.code !== "ERR_SOCKET_DGRAM_NOT_RUNNING") {
+        throw err;
+      }
+    }
   }
 }
 

@@ -5,7 +5,53 @@ const DatabaseManager = require("./databaseManager");
 const UDPServer = require("./udpServer");
 const axios = require("axios");
 
-let dbManager, serverDbManager; // Define at top for access in poller
+let dbManager, serverDbManager, httpServer, udpServer, tempPollInterval; // Define at top for access in shutdown handlers
+let tempPollInProgress = false;
+let shutdownInProgress = false;
+
+function getPoolOptions(prefix) {
+  return {
+    pool: {
+      connectionLimit: parseInt(process.env[`${prefix}_DB_CONNECTION_LIMIT`], 10) || 5,
+      maxIdle: parseInt(process.env[`${prefix}_DB_MAX_IDLE`], 10) || 2,
+      idleTimeout: parseInt(process.env[`${prefix}_DB_IDLE_TIMEOUT_MS`], 10) || 30_000,
+      queueLimit: parseInt(process.env[`${prefix}_DB_QUEUE_LIMIT`], 10) || 50,
+    },
+    slowQueryThresholdMs: parseInt(process.env.DB_SLOW_QUERY_THRESHOLD_MS, 10) || 2_000,
+  };
+}
+
+async function shutdown(signal, exitCode = 0) {
+  if (shutdownInProgress) {
+    return;
+  }
+
+  shutdownInProgress = true;
+  console.log(`🛑 Received ${signal}. Closing servers and database pools...`);
+
+  if (tempPollInterval) {
+    clearInterval(tempPollInterval);
+    tempPollInterval = null;
+  }
+
+  if (udpServer) {
+    udpServer.close();
+  }
+
+  if (httpServer) {
+    httpServer.close();
+  }
+
+  await Promise.allSettled([
+    dbManager?.close(),
+    serverDbManager?.close(),
+  ]);
+
+  process.exit(exitCode);
+}
+
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.once("SIGTERM", () => shutdown("SIGTERM"));
 
 async function startApplication() {
   try {
@@ -30,8 +76,8 @@ async function startApplication() {
     }
 
     // Initialize DB managers with pooling
-    dbManager = new DatabaseManager(dbConfig);
-    serverDbManager = new DatabaseManager(serverDbConfig);
+    dbManager = new DatabaseManager(dbConfig, { name: "local", ...getPoolOptions("LOCAL") });
+    serverDbManager = new DatabaseManager(serverDbConfig, { name: "server", ...getPoolOptions("SERVER") });
 
     await dbManager.connect();
     await serverDbManager.connect();
@@ -39,7 +85,7 @@ async function startApplication() {
 
     // Start UDP server
     const udpPort = parseInt(process.env.UDP_PORT, 10) || 5001;
-    const udpServer = new UDPServer(dbManager, serverDbManager, {
+    udpServer = new UDPServer(dbManager, serverDbManager, {
       port: udpPort,
       host: "0.0.0.0",
     });
@@ -61,7 +107,7 @@ async function startApplication() {
     //   const parsedUrl = url.parse(req.url, true);
 
     // });
-    const httpServer = require("http").createServer(async (req, res) => {
+    httpServer = require("http").createServer(async (req, res) => {
       const parsedUrl = url.parse(req.url, true);
 
       res.setHeader("Access-Control-Allow-Origin", "*");
@@ -94,7 +140,7 @@ async function startApplication() {
         LIMIT 1
       `;
 
-          const [rows] = await dbManager.pool.query(query);
+          const rows = await dbManager.query(query);
 
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(rows[0] || {}));
@@ -154,38 +200,39 @@ async function startApplication() {
     });
 
     // Start polling every 1 minute
-    setInterval(pollExternalControllers, 60 * 1000);
+    tempPollInterval = setInterval(pollExternalControllers, 60 * 1000);
     pollExternalControllers();
-
-    // Graceful shutdown
-    process.on("SIGINT", async () => {
-      console.log("Shutting down...");
-      await dbManager.close();
-      await serverDbManager.close();
-      process.exit(0);
-    });
 
   } catch (error) {
     console.error("❌ Initialization error:", error);
-    process.exit(1);
+    await shutdown("initialization error", 1);
   }
 }
 
-process.on("unhandledRejection", (err) => {
+process.on("unhandledRejection", async (err) => {
   console.error("🔴 Unhandled rejection:", err);
-  process.exit(1);
+  await shutdown("unhandledRejection", 1);
 });
 
 // 🛰️ Periodic fetch from external controller IP
 const pollExternalControllers = async () => {
+  if (tempPollInProgress) {
+    console.warn("⏳ Previous temperature poll is still running; skipping this interval");
+    return;
+  }
+
+  tempPollInProgress = true;
+
   try {
-    const response = await axios.get("http://192.168.2.218");
+    const response = await axios.get("http://192.168.2.218", { timeout: 10_000 });
     const data = response.data;
 
     await insertTemperatureLine(data);
     console.log(`[${new Date().toISOString()}] ✅ Controller data inserted`);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] ❌ Failed to fetch or insert data:`, error.message);
+  } finally {
+    tempPollInProgress = false;
   }
 };
 
@@ -203,7 +250,7 @@ const insertTemperatureLine = async (data) => {
     VALUES (?, ?, ?, ?, ?)
   `;
 
-  await dbManager.pool.query(query, [timestamp, inVal, midVal, outVal, pressureVal]);
+  await dbManager.query(query, [timestamp, inVal, midVal, outVal, pressureVal]);
 };
 
 startApplication();
