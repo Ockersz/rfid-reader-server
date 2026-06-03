@@ -57,9 +57,63 @@ async function startApplication() {
 
     // const httpsPort = parseInt(process.env.HTTPS_PORT, 10) || 8443;
 
+    // const httpServer = require("http").createServer(async (req, res) => {
+    //   const parsedUrl = url.parse(req.url, true);
+
+    // });
     const httpServer = require("http").createServer(async (req, res) => {
       const parsedUrl = url.parse(req.url, true);
 
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+      if (req.method === "OPTIONS") {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
+      if (req.method === "GET" && parsedUrl.pathname === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "ok" }));
+        return;
+      }
+
+      if (req.method === "GET" && parsedUrl.pathname === "/fetchtemp") {
+        try {
+          const query = `
+        SELECT 
+          \`date\`,
+          \`intemp\`,
+          \`middletemp\`,
+          \`outtemp\`,
+          \`pressure\`
+        FROM rfid_db.temperature_line
+        ORDER BY id DESC
+        LIMIT 1
+      `;
+
+          const [rows] = await dbManager.pool.query(query);
+
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(rows[0] || {}));
+          return;
+
+        } catch (err) {
+          console.error("❌ Failed to fetch temperature data:", err.message);
+
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            error: "Failed to fetch temperature data",
+            details: err.message
+          }));
+          return;
+        }
+      }
+
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not Found" }));
     });
 
     // const httpsServer = https.createServer(sslOptions, async (req, res) => {
@@ -125,7 +179,7 @@ process.on("unhandledRejection", (err) => {
 // 🛰️ Periodic fetch from external controller IP
 const pollExternalControllers = async () => {
   try {
-    const response = await axios.get("http://192.168.2.70:5000");
+    const response = await axios.get("http://192.168.2.218");
     const data = response.data;
 
     await insertTemperatureLine(data);
