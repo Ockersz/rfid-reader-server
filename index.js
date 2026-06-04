@@ -159,18 +159,18 @@ async function startApplication() {
         try {
           const query = `
         SELECT 
-          \`date\`,
-          \`intemp intemp_1\`,
-          \`middletemp middletemp_1\`,
-          \`outtemp outtemp_1\`,
-          \`pressure pressure_1\`,
-            \`0 intemp_2\`,
-          \`0 middletemp_2\`,
-          \`0 outtemp_2\`,
-          \`0 pressure_2\`
-        FROM rfid_db.temperature_line
-        ORDER BY id DESC
-        LIMIT 1
+  \`date\`,
+  \`intemp\` AS \`intemp_1\`,
+  \`middletemp\` AS \`middletemp_1\`,
+  \`outtemp\` AS \`outtemp_1\`,
+  \`pressure\` AS \`pressure_1\`,
+  0 AS \`intemp_2\`,
+  0 AS \`middletemp_2\`,
+  0 AS \`outtemp_2\`,
+  0 AS \`pressure_2\`
+FROM rfid_db.temperature_line
+ORDER BY id DESC
+LIMIT 1;
       `;
 
           const rows = await dbManager.query(query);
