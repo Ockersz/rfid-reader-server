@@ -160,10 +160,14 @@ async function startApplication() {
           const query = `
         SELECT 
           \`date\`,
-          \`intemp\`,
-          \`middletemp\`,
-          \`outtemp\`,
-          \`pressure\`
+          \`intemp intemp_1\`,
+          \`middletemp middletemp_1\`,
+          \`outtemp outtemp_1\`,
+          \`pressure pressure_1\`,
+            \`0 intemp_2\`,
+          \`0 middletemp_2\`,
+          \`0 outtemp_2\`,
+          \`0 pressure_2\`
         FROM rfid_db.temperature_line
         ORDER BY id DESC
         LIMIT 1
