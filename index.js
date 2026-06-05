@@ -14,6 +14,11 @@ function getEnvInt(name, defaultValue) {
   return Number.isInteger(value) && value > 0 ? value : defaultValue;
 }
 
+function getEnvNonNegativeInt(name, defaultValue) {
+  const value = parseInt(process.env[name], 10);
+  return Number.isInteger(value) && value >= 0 ? value : defaultValue;
+}
+
 function getEnvBool(name, defaultValue = false) {
   const value = process.env[name];
 
@@ -28,12 +33,13 @@ function getPoolOptions(prefix) {
   return {
     pool: {
       connectionLimit: getEnvInt(`${prefix}_DB_CONNECTION_LIMIT`, 5),
-      maxIdle: getEnvInt(`${prefix}_DB_MAX_IDLE`, 2),
+      maxIdle: getEnvNonNegativeInt(`${prefix}_DB_MAX_IDLE`, 0),
       idleTimeout: getEnvInt(`${prefix}_DB_IDLE_TIMEOUT_MS`, 30_000),
       queueLimit: getEnvInt(`${prefix}_DB_QUEUE_LIMIT`, 50),
       connectTimeout: getEnvInt(`${prefix}_DB_CONNECT_TIMEOUT_MS`, 10_000),
     },
     slowQueryThresholdMs: getEnvInt("DB_SLOW_QUERY_THRESHOLD_MS", 2_000),
+    activeConnectionWarnMs: getEnvInt("DB_ACTIVE_CONNECTION_WARN_MS", 60_000),
     poolDebug: getEnvBool("DB_POOL_DEBUG"),
   };
 }
