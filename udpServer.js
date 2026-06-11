@@ -40,7 +40,7 @@ class UDPServer {
     const ip = rinfo.address;
     const rawMessage = msg.toString().trim();
     const cleanMessage = rawMessage.replace(/[@$]/g, "");
-    console.log(`Received message from ${ip}:${rinfo.port}: ${cleanMessage}`);
+    // console.log(`Received message from ${ip}:${rinfo.port}: ${cleanMessage}`);
 
     try {
       if (ip === "192.168.2.215") {
@@ -66,7 +66,7 @@ class UDPServer {
       const results = await this.dbManager.query(checkQuery, [mouldId]);
 
       if (results.length > 0) {
-        console.log("Row exists with intime but outtime null, ignoring insert");
+        // console.log("Row exists with intime but outtime null, ignoring insert");
         return;
       }
 
@@ -192,7 +192,7 @@ class UDPServer {
 
         console.log("Updated row with outtime:", mouldId);
       } else {
-        console.log("No active record found for mouldId:", mouldId);
+        // console.log("No active record found for mouldId:", mouldId);
       }
     } catch (error) {
       console.error("Error during outtime update:", error);

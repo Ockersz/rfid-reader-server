@@ -170,10 +170,10 @@ async function startApplication() {
   \`middletemp\` AS \`middletemp_1\`,
   \`outtemp\` AS \`outtemp_1\`,
   \`pressure\` AS \`pressure_1\`,
-  0 AS \`intemp_2\`,
-  0 AS \`middletemp_2\`,
-  0 AS \`outtemp_2\`,
-  0 AS \`pressure_2\`
+   \`intemp2\` AS \`intemp_2\`,
+  \`middletemp2\` AS \`middletemp_2\`,
+  \`outtemp2\` AS \`outtemp_2\`,
+  \`pressure2\` AS \`pressure_2\`
 FROM rfid_db.temperature_line
 ORDER BY id DESC
 LIMIT 1;
@@ -284,12 +284,17 @@ const insertTemperatureLine = async (data) => {
   const outVal = controllers["3"]?.pv ?? 0;
   const pressureVal = controllers["4"]?.pv ?? 0;
 
+  const inVal2 = controllers["6"]?.pv ?? 0;
+  const midVal2 = controllers["7"]?.pv ?? 0;
+  const outVal2 = controllers["8"]?.pv ?? 0;
+  const pressureVal2 = controllers["9"]?.pv ?? 0;
+
   const query = `
-    INSERT INTO temperature_line (\`date\`, \`intemp\`, \`middletemp\`, \`outtemp\`, \`pressure\`)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO temperature_line (\`date\`, \`intemp\`, \`middletemp\`, \`outtemp\`, \`pressure\`, \`intemp2\`, \`middletemp2\`, \`outtemp2\`, \`pressure2\`)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
-  await dbManager.query(query, [timestamp, inVal, midVal, outVal, pressureVal]);
+  await dbManager.query(query, [timestamp, inVal, midVal, outVal, pressureVal, inVal2, midVal2, outVal2, pressureVal2]);
 };
 
 startApplication();
