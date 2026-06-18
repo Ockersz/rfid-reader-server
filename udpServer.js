@@ -3,6 +3,49 @@ const dgram = require("dgram");
 const DatabaseManager = require("./databaseManager");
 const moment = require('moment');
 
+const RFID_DEVICES = {
+  "192.168.2.215": { action: "out", line: "1" },
+  "192.168.2.216": { action: "in", line: "1" },
+  "192.168.2.222": { action: "in", line: "2" },
+  "192.168.2.223": { action: "out", line: "2" },
+};
+
+const TEMPERATURE_COLUMNS_BY_LINE = {
+  "1": {
+    in: "intemp",
+    middle: "middletemp",
+    out: "outtemp",
+    pressure: "pressure",
+  },
+  "2": {
+    in: "intemp2",
+    middle: "middletemp2",
+    out: "outtemp2",
+    pressure: "pressure2",
+  },
+};
+
+function getTemperatureColumns(line) {
+  return TEMPERATURE_COLUMNS_BY_LINE[line] || TEMPERATURE_COLUMNS_BY_LINE["1"];
+}
+
+function normalizeTempStats(row = {}) {
+  return {
+    in_min: row.in_min ?? null,
+    in_max: row.in_max ?? null,
+    in_avg: row.in_avg ?? null,
+    mid_min: row.mid_min ?? null,
+    mid_max: row.mid_max ?? null,
+    mid_avg: row.mid_avg ?? null,
+    out_min: row.out_min ?? null,
+    out_max: row.out_max ?? null,
+    out_avg: row.out_avg ?? null,
+    pressure: row.pressure ?? null,
+    pressure_min: row.pressure_min ?? null,
+    pressure_max: row.pressure_max ?? null,
+  };
+}
+
 /**
  * UDPServer handles incoming UDP messages and updates the database accordingly.
  */
@@ -43,53 +86,65 @@ class UDPServer {
     // console.log(`Received message from ${ip}:${rinfo.port}: ${cleanMessage}`);
 
     try {
-      if (ip === "192.168.2.215") {
-        // console.log("Received outtime message");
-        // console.log(`Outtime message: ${cleanMessage}`);
-        await this._handleOuttimeUpdate(cleanMessage);
-      } else if (ip === "192.168.2.216") {
-        // console.log("Received intime message");
-        // console.log(`Intime message: ${cleanMessage}`);
-        await this._handleIntimeInsert(cleanMessage);
+      const device = RFID_DEVICES[ip];
 
-      } else {
+      if (!device) {
         console.log(`Unhandled IP address: ${ip}`);
+        return;
+      }
+
+      if (device.action === "out") {
+        await this._handleOuttimeUpdate(cleanMessage, device.line);
+      } else if (device.action === "in") {
+        await this._handleIntimeInsert(cleanMessage, device.line);
       }
     } catch (error) {
       console.error("Error handling UDP message:", error);
     }
   }
 
-  async _handleIntimeInsert(mouldId) {
+  async _handleIntimeInsert(mouldId, line = "1") {
     try {
-      const checkQuery = `SELECT * FROM rfid_db.rfid WHERE mouldId = ? AND intime IS NOT NULL AND outtime IS NULL`;
-      const results = await this.dbManager.query(checkQuery, [mouldId]);
+      const checkQuery = `
+        SELECT *
+        FROM rfid_db.rfid
+        WHERE mouldId = ?
+          AND COALESCE(\`line\`, '1') = ?
+          AND intime IS NOT NULL
+          AND outtime IS NULL
+      `;
+      const results = await this.dbManager.query(checkQuery, [mouldId, line]);
 
       if (results.length > 0) {
         // console.log("Row exists with intime but outtime null, ignoring insert");
         return;
       }
 
-      const insertQuery = `INSERT INTO rfid_db.rfid (mouldId, intime, outtime, creadt, sync_status) VALUES (?, NOW(), NULL, NOW(), 'pending')`;
-      const result = await this.dbManager.query(insertQuery, [mouldId]);
+      const insertQuery = `
+        INSERT INTO rfid_db.rfid (mouldId, intime, outtime, creadt, sync_status, \`line\`)
+        VALUES (?, NOW(), NULL, NOW(), 'pending', ?)
+      `;
+      const result = await this.dbManager.query(insertQuery, [mouldId, line]);
       const insertedId = result.insertId;
 
       try {
-        const dateTimeNow = moment(new Date(), 'YYYY-MM-DD HH:mm:ss');
-        const serverInsertQuery = `INSERT INTO hexsys.rfid (id, mouldId, intime, outtime, creadt) VALUES (?, ?, ${dateTimeNow}, NULL, ${dateTimeNow})`;
-        await this.serverDbManager.query(serverInsertQuery, [insertedId, mouldId]);
+        const serverInsertQuery = `
+          INSERT INTO hexsys.rfid (id, mouldId, intime, outtime, creadt, \`line\`)
+          VALUES (?, ?, NOW(), NULL, NOW(), ?)
+        `;
+        await this.serverDbManager.query(serverInsertQuery, [insertedId, mouldId, line]);
         await this.dbManager.query(`UPDATE rfid_db.rfid SET sync_status = 'synced' WHERE id = ?`, [insertedId]);
       } catch (err) {
         console.warn("Server DB sync failed for insert. Will retry later.");
       }
 
-      console.log("Inserted new row with intime:", mouldId);
+      console.log(`Inserted new row with intime for line ${line}:`, mouldId);
     } catch (error) {
       console.error("Error during intime insertion:", error);
     }
   }
 
-  async _handleOuttimeUpdate(mouldId) {
+  async _handleOuttimeUpdate(mouldId, line = "1") {
     try {
       const checkQuery = `SELECT a.*,
         (SELECT 
@@ -98,6 +153,7 @@ class UDPServer {
             rfid r
         WHERE
             r.mouldId = a.mouldId
+                AND COALESCE(r.\`line\`, '1') = COALESCE(a.\`line\`, '1')
                 AND r.intime BETWEEN CASE
                 WHEN
                     TIME(a.intime) >= '07:00:00'
@@ -109,88 +165,124 @@ class UDPServer {
                     ELSE DATE_SUB(DATE(a.intime), INTERVAL 1 DAY) + INTERVAL '19:00:00' HOUR_SECOND
                 END
             END AND a.intime) AS cycle_count
-        FROM rfid_db.rfid a WHERE mouldId = ? AND intime IS NOT NULL AND outtime IS NULL ORDER BY id DESC LIMIT 1`;
-      const results = await this.dbManager.query(checkQuery, [mouldId]);
+        FROM rfid_db.rfid a
+        WHERE mouldId = ?
+          AND COALESCE(\`line\`, '1') = ?
+          AND intime IS NOT NULL
+          AND outtime IS NULL
+        ORDER BY id DESC
+        LIMIT 1`;
+      const results = await this.dbManager.query(checkQuery, [mouldId, line]);
 
       if (results.length > 0) {
-        const { id, intime, outtime, cycle_count } = results[0];
-        const intimeFormatted = new Date(intime)
-          .toISOString()
-          .slice(0, 19)
-          .replace('T', ' ');
+        const { id, intime, cycle_count } = results[0];
+        const intimeFormatted = moment(intime).format('YYYY-MM-DD HH:mm:ss');
+        const temperatureColumns = getTemperatureColumns(line);
 
         const queryForTem = `
   SELECT 
-    ROUND(MIN(intemp), 2) in_min,
-    ROUND(MAX(intemp), 2) in_max,
-    ROUND(AVG(intemp), 2) in_avg,
-    ROUND(MIN(middletemp), 2) mid_min,
-    ROUND(MAX(middletemp), 2) mid_max,
-    ROUND(AVG(middletemp), 2) mid_avg,
-    ROUND(MIN(outtemp), 2) out_min,
-    ROUND(MAX(outtemp), 2) out_max,
-    ROUND(AVG(outtemp), 2) out_avg,
-    ROUND(AVG(pressure), 2) pressure,
-    ROUND(MIN(pressure), 2) pressure_min,
-    ROUND(MAX(pressure), 2) pressure_max
+    ROUND(MIN(${temperatureColumns.in}), 2) in_min,
+    ROUND(MAX(${temperatureColumns.in}), 2) in_max,
+    ROUND(AVG(${temperatureColumns.in}), 2) in_avg,
+    ROUND(MIN(${temperatureColumns.middle}), 2) mid_min,
+    ROUND(MAX(${temperatureColumns.middle}), 2) mid_max,
+    ROUND(AVG(${temperatureColumns.middle}), 2) mid_avg,
+    ROUND(MIN(${temperatureColumns.out}), 2) out_min,
+    ROUND(MAX(${temperatureColumns.out}), 2) out_max,
+    ROUND(AVG(${temperatureColumns.out}), 2) out_avg,
+    ROUND(AVG(${temperatureColumns.pressure}), 2) pressure,
+    ROUND(MIN(${temperatureColumns.pressure}), 2) pressure_min,
+    ROUND(MAX(${temperatureColumns.pressure}), 2) pressure_max
   FROM rfid_db.temperature_line
   WHERE 
-    date BETWEEN '${intimeFormatted}' AND NOW()
-    AND (intemp > 5 AND middletemp > 5 AND outtemp > 5 AND pressure > 1 AND pressure < 10);`;
+    date BETWEEN ? AND NOW()
+    AND (${temperatureColumns.in} > 5 AND ${temperatureColumns.middle} > 5 AND ${temperatureColumns.out} > 5 AND ${temperatureColumns.pressure} > 1 AND ${temperatureColumns.pressure} < 10);`;
 
         console.log(queryForTem);
-        const searchTemp = await this.dbManager.query(queryForTem);
+        const searchTemp = await this.dbManager.query(queryForTem, [intimeFormatted]);
+        const tempStats = normalizeTempStats(searchTemp[0]);
         console.log("Temperature search results:", searchTemp);
-        const [tempLogs] = await this.dbManager.query(`CALL get_temperature_logs(?)`, [intime]);
-        let tempLogsJson = '[]';
-        if (tempLogs?.length > 0) {
-          // json stringify temperature logs
-          tempLogsJson = JSON.stringify(tempLogs);
-        }
+        const tempLogs = await this._getTemperatureLogs(intimeFormatted, line);
+        const tempLogsJson = tempLogs?.length > 0 ? JSON.stringify(tempLogs) : '[]';
 
         const updateQuery = `UPDATE rfid_db.rfid SET outtime = NOW(), sync_status = 'pending',
-          in_min = ${searchTemp[0].in_min},
-          in_max = ${searchTemp[0].in_max},
-          in_avg = ${searchTemp[0].in_avg},
-          mid_min = ${searchTemp[0].mid_min},
-          mid_max = ${searchTemp[0].mid_max},
-          mid_avg = ${searchTemp[0].mid_avg},
-          out_min = ${searchTemp[0].out_min},
-          out_max = ${searchTemp[0].out_max},
-          out_avg = ${searchTemp[0].out_avg},
-          pressure = ${searchTemp[0].pressure},
-          pressure_min = ${searchTemp[0].pressure_min},
-          pressure_max = ${searchTemp[0].pressure_max},
-          templogs = '${tempLogsJson}',
-          cycle = ${cycle_count}
+          in_min = ?,
+          in_max = ?,
+          in_avg = ?,
+          mid_min = ?,
+          mid_max = ?,
+          mid_avg = ?,
+          out_min = ?,
+          out_max = ?,
+          out_avg = ?,
+          pressure = ?,
+          pressure_min = ?,
+          pressure_max = ?,
+          templogs = ?,
+          cycle = ?,
+          \`line\` = ?
         WHERE id = ?`;
-        await this.dbManager.query(updateQuery, [id]);
+        await this.dbManager.query(updateQuery, [
+          tempStats.in_min,
+          tempStats.in_max,
+          tempStats.in_avg,
+          tempStats.mid_min,
+          tempStats.mid_max,
+          tempStats.mid_avg,
+          tempStats.out_min,
+          tempStats.out_max,
+          tempStats.out_avg,
+          tempStats.pressure,
+          tempStats.pressure_min,
+          tempStats.pressure_max,
+          tempLogsJson,
+          cycle_count,
+          line,
+          id,
+        ]);
 
         try {
-          const dateTimeNow = moment(new Date(), 'YYYY-MM-DD HH:mm:ss');
-          const serverUpdateQuery = `UPDATE hexsys.rfid SET outtime = ${dateTimeNow},
-            in_min = ${searchTemp[0].in_min},
-            in_max = ${searchTemp[0].in_max},
-            in_avg = ${searchTemp[0].in_avg},
-            mid_min = ${searchTemp[0].mid_min},
-            mid_max = ${searchTemp[0].mid_max},
-            mid_avg = ${searchTemp[0].mid_avg},
-            out_min = ${searchTemp[0].out_min},
-            out_max = ${searchTemp[0].out_max},
-            out_avg = ${searchTemp[0].out_avg},
-            pressure = ${searchTemp[0].pressure},
-            pressure_min = ${searchTemp[0].pressure_min},
-            pressure_max = ${searchTemp[0].pressure_max},
-            templogs = '${tempLogsJson}',
-            cycle = ${cycle_count}
+          const serverUpdateQuery = `UPDATE hexsys.rfid SET outtime = NOW(),
+            in_min = ?,
+            in_max = ?,
+            in_avg = ?,
+            mid_min = ?,
+            mid_max = ?,
+            mid_avg = ?,
+            out_min = ?,
+            out_max = ?,
+            out_avg = ?,
+            pressure = ?,
+            pressure_min = ?,
+            pressure_max = ?,
+            templogs = ?,
+            cycle = ?,
+            \`line\` = ?
           WHERE id = ?`;
-          await this.serverDbManager.query(serverUpdateQuery, [id]);
+          await this.serverDbManager.query(serverUpdateQuery, [
+            tempStats.in_min,
+            tempStats.in_max,
+            tempStats.in_avg,
+            tempStats.mid_min,
+            tempStats.mid_max,
+            tempStats.mid_avg,
+            tempStats.out_min,
+            tempStats.out_max,
+            tempStats.out_avg,
+            tempStats.pressure,
+            tempStats.pressure_min,
+            tempStats.pressure_max,
+            tempLogsJson,
+            cycle_count,
+            line,
+            id,
+          ]);
           await this.dbManager.query(`UPDATE rfid_db.rfid SET sync_status = 'synced' WHERE id = ?`, [id]);
         } catch (err) {
           console.warn("Server DB sync failed for update. Will retry later.");
         }
 
-        console.log("Updated row with outtime:", mouldId);
+        console.log(`Updated row with outtime for line ${line}:`, mouldId);
       } else {
         // console.log("No active record found for mouldId:", mouldId);
       }
@@ -199,16 +291,33 @@ class UDPServer {
     }
   }
 
+  async _getTemperatureLogs(intimeFormatted, line) {
+    const temperatureColumns = getTemperatureColumns(line);
+    const query = `
+      SELECT
+        date,
+        ${temperatureColumns.in} AS intemp,
+        ${temperatureColumns.middle} AS middletemp,
+        ${temperatureColumns.out} AS outtemp,
+        ${temperatureColumns.pressure} AS pressure
+      FROM rfid_db.temperature_line
+      WHERE date BETWEEN ? AND NOW()
+      ORDER BY date ASC
+    `;
+
+    return this.dbManager.query(query, [intimeFormatted]);
+  }
+
   async _syncPendingRecords() {
     try {
       const pendingRecords = await this.dbManager.query(`SELECT * FROM rfid_db.rfid WHERE sync_status = 'pending'`);
 
       for (const row of pendingRecords) {
-        const { id, mouldId, intime, outtime, creadt, in_min, in_max, in_avg, mid_min, mid_max, mid_avg, out_min, out_max, out_avg, pressure, pressure_min, pressure_max, templogs, cycle } = row;
+        const { id, mouldId, intime, outtime, creadt, in_min, in_max, in_avg, mid_min, mid_max, mid_avg, out_min, out_max, out_avg, pressure, pressure_min, pressure_max, templogs, cycle, line } = row;
         const query = `
           INSERT INTO hexsys.rfid (id, mouldId, intime, outtime,
-            in_min, in_max, in_avg, mid_min, mid_max, mid_avg, out_min, out_max, out_avg, pressure, pressure_min, pressure_max, templogs, creadt, cycle)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            in_min, in_max, in_avg, mid_min, mid_max, mid_avg, out_min, out_max, out_avg, pressure, pressure_min, pressure_max, templogs, creadt, cycle, \`line\`)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
             mouldId = VALUES(mouldId),
             intime = VALUES(intime),
@@ -227,11 +336,12 @@ class UDPServer {
             pressure_max = VALUES(pressure_max),
             templogs = VALUES(templogs),
             creadt = VALUES(creadt),
-            cycle = VALUES(cycle)
+            cycle = VALUES(cycle),
+            \`line\` = VALUES(\`line\`)
         `;
 
         try {
-          await this.serverDbManager.query(query, [id, mouldId, intime, outtime, in_min, in_max, in_avg, mid_min, mid_max, mid_avg, out_min, out_max, out_avg, pressure, pressure_min, pressure_max, templogs, creadt, cycle]);
+          await this.serverDbManager.query(query, [id, mouldId, intime, outtime, in_min, in_max, in_avg, mid_min, mid_max, mid_avg, out_min, out_max, out_avg, pressure, pressure_min, pressure_max, templogs, creadt, cycle, line || "1"]);
           await this.dbManager.query(`UPDATE rfid_db.rfid SET sync_status = 'synced' WHERE id = ?`, [id]);
           console.log(`✅ Synced record ID: ${id}`);
         } catch (err) {
