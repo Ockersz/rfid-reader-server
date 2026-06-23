@@ -10,6 +10,16 @@ const DEFAULT_POOL_CONFIG = {
   keepAliveInitialDelay: 0,
 };
 
+function getLocalMysqlTimeZoneOffset(date = new Date()) {
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteMinutes = Math.abs(offsetMinutes);
+  const hours = String(Math.floor(absoluteMinutes / 60)).padStart(2, '0');
+  const minutes = String(absoluteMinutes % 60).padStart(2, '0');
+
+  return `${sign}${hours}:${minutes}`;
+}
+
 /**
  * DatabaseManager handles MySQL connection pooling and query execution using mysql2/promise.
  */
@@ -24,12 +34,14 @@ class DatabaseManager {
     this.slowQueryThresholdMs = options.slowQueryThresholdMs ?? 2_000;
     this.activeConnectionWarnMs = options.activeConnectionWarnMs ?? 60_000;
     this.poolDebug = options.poolDebug ?? false;
+    this.sessionTimeZone = options.sessionTimeZone ?? process.env.DB_TIME_ZONE ?? 'local';
     this.pool = mysql.createPool({
       ...config,
       ...DEFAULT_POOL_CONFIG,
       ...(options.pool || {}),
     });
     this._activeConnections = new Map();
+    this._connectionTimeZones = new Map();
     this._idleReaperInterval = null;
 
     this._setupPoolLogging();
@@ -40,10 +52,12 @@ class DatabaseManager {
     this.pool.on('connection', (connection) => {
       connection.once('end', () => {
         this._activeConnections.delete(connection.threadId);
+        this._connectionTimeZones.delete(connection.threadId);
       });
 
       connection.once('error', () => {
         this._activeConnections.delete(connection.threadId);
+        this._connectionTimeZones.delete(connection.threadId);
       });
 
       console.log(`🔌 [${this.name}] opened MySQL connection ${connection.threadId}`);
@@ -172,6 +186,38 @@ class DatabaseManager {
     return String(sql).replace(/\s+/g, ' ').trim().slice(0, 500);
   }
 
+  _getSessionTimeZone() {
+    if (this.sessionTimeZone === false || this.sessionTimeZone === null) {
+      return null;
+    }
+
+    if (this.sessionTimeZone === 'local') {
+      return getLocalMysqlTimeZoneOffset();
+    }
+
+    return this.sessionTimeZone;
+  }
+
+  async _ensureSessionTimeZone(connection) {
+    const timeZone = this._getSessionTimeZone();
+
+    if (!timeZone) {
+      return;
+    }
+
+    const threadId = connection?.connection?.threadId;
+
+    if (threadId && this._connectionTimeZones.get(threadId) === timeZone) {
+      return;
+    }
+
+    await connection.query('SET time_zone = ?', [timeZone]);
+
+    if (threadId) {
+      this._connectionTimeZones.set(threadId, timeZone);
+    }
+  }
+
   /**
    * Verifies a successful connection to the database.
    * @returns {Promise<void>}
@@ -181,8 +227,9 @@ class DatabaseManager {
 
     try {
       connection = await this.pool.getConnection();
+      await this._ensureSessionTimeZone(connection);
       await connection.ping();
-      console.log(`✅ [${this.name}] Connected to the database`);
+      console.log(`✅ [${this.name}] Connected to the database using time zone ${this._getSessionTimeZone() || 'database default'}`);
     } catch (err) {
       console.error(`❌ [${this.name}] Database connection failed:`, err.message);
       throw err;
@@ -205,6 +252,7 @@ class DatabaseManager {
 
     try {
       connection = await this.pool.getConnection();
+      await this._ensureSessionTimeZone(connection);
       this._setActiveQuery(connection, sql);
 
       const [rows] = await connection.execute(sql, values);
