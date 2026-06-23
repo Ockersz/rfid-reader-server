@@ -29,6 +29,27 @@ function getEnvBool(name, defaultValue = false) {
   return ["1", "true", "yes"].includes(value.toLowerCase());
 }
 
+function getLocalLogTimestamp(date = new Date()) {
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absoluteMinutes = Math.abs(offsetMinutes);
+  const offsetHours = String(Math.floor(absoluteMinutes / 60)).padStart(2, "0");
+  const offsetRemainderMinutes = String(absoluteMinutes % 60).padStart(2, "0");
+  const timezoneOffset = `${sign}${offsetHours}:${offsetRemainderMinutes}`;
+
+  const localDateTime = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-") + " " + [
+    String(date.getHours()).padStart(2, "0"),
+    String(date.getMinutes()).padStart(2, "0"),
+    String(date.getSeconds()).padStart(2, "0"),
+  ].join(":");
+
+  return `${localDateTime} ${timezoneOffset}`;
+}
+
 function getPoolOptions(prefix) {
   return {
     pool: {
@@ -267,9 +288,9 @@ const pollExternalControllers = async () => {
     const data = response.data;
 
     await insertTemperatureLine(data);
-    console.log(`[${new Date().toISOString()}] ✅ Controller data inserted`);
+    console.log(`[${getLocalLogTimestamp()}] ✅ Controller data inserted`);
   } catch (error) {
-    console.error(`[${new Date().toISOString()}] ❌ Failed to fetch or insert data:`, error.message);
+    console.error(`[${getLocalLogTimestamp()}] ❌ Failed to fetch or insert data:`, error.message);
   } finally {
     tempPollInProgress = false;
   }
